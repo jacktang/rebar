@@ -169,8 +169,7 @@ create1(Config, TemplateId) ->
 
     %% Load variables from disk file, if provided
     Context1 = case rebar_config:get_global(Config, template_vars, undefined) of
-                   undefined ->
-                       Context0;
+                   undefined -> Context0;
                    File ->
                        case consult(load_file([], file, File)) of
                            {error, Reason} ->
@@ -183,14 +182,22 @@ create1(Config, TemplateId) ->
                        end
                end,
 
+    TemplateVarsInConf = rebar_config:get(Config, template_vars, []),
+    Context2 = case lists:keyfind(TemplateId, 1, TemplateVarsInConf) of
+                   false -> Context1;
+                   {_, Terms2} ->
+                       M2 = fun(_Key, _Base, Override) -> Override end,
+                       dict:merge(M2, Context1, dict:from_list(Terms2))
+               end,
+
     %% For each variable, see if it's defined in global vars -- if it is,
     %% prefer that value over the defaults
-    Context2 = update_vars(Config, dict:fetch_keys(Context1), Context1),
-    ?DEBUG("Template ~p context: ~p\n", [TemplateId, dict:to_list(Context1)]),
+    Context3 = update_vars(Config, dict:fetch_keys(Context2), Context2),
+    ?DEBUG("Template ~p context: ~p\n", [TemplateId, dict:to_list(Context2)]),
 
     %% Handle variables that possibly include other variables in their
     %% definition
-    Context = resolve_variables(dict:to_list(Context2), Context2),
+    Context = resolve_variables(dict:to_list(Context3), Context3),
 
     ?DEBUG("Resolved Template ~p context: ~p\n",
            [TemplateId, dict:to_list(Context)]),
