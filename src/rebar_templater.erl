@@ -167,28 +167,32 @@ create1(Config, TemplateId) ->
             Context0 = dict:new()
     end,
 
-    %% Load variables from disk file, if provided
-    Context1 = case rebar_config:get_global(Config, template_vars, undefined) of
-                   undefined -> Context0;
-                   File ->
-                       case consult(load_file([], file, File)) of
-                           {error, Reason} ->
-                               ?ABORT("Unable to load template_vars from ~s: ~p\n",
-                                      [File, Reason]);
-                           Terms ->
-                               %% TODO: Cleanup/merge with similar code in rebar_reltool
-                               M = fun(_Key, _Base, Override) -> Override end,
-                               dict:merge(M, Context0, dict:from_list(Terms))
-                       end
-               end,
+    %% Load global variables from disk file, if provided
+%% I don't like the original "global" idea (template_var option passing through command line) in rebar (#476)
+    %% SO HERE GOES WARNING:
+    %% ** the branch break backwards compatibility! ***
+    GVarsFile = filename:join([os:getenv("HOME"), ".rebar", "global.vars"]),
+    Context1 = case consult(load_file([], file, GVarsFile)) of
+                   {error,enoent} -> % no such file
+                       Context0;
+                   {error, Reason} ->
+                       ?ABORT("Unable to load template variables from ~s: ~p\n",
+                              [GVarsFile, Reason]);
+                   Terms ->
+                       %% TODO: Cleanup/merge with similar code in rebar_reltool
+                       M = fun(_Key, _Base, Override) -> Override end,
+                       dict:merge(M, Context0, dict:from_list(Terms))
+    end,
 
-    TemplateVarsInConf = rebar_config:get(Config, template_vars, []),
-    Context2 = case lists:keyfind(TemplateId, 1, TemplateVarsInConf) of
-                   false -> Context1;
+    %% Load variables that defined in rebar config file
+    TemplateVars = rebar_config:get(Config, template_vars, []),
+    Context2 = case lists:keyfind(TemplateId, 1, TemplateVars) of
+                   false       -> Context1;
                    {_, Terms2} ->
                        M2 = fun(_Key, _Base, Override) -> Override end,
                        dict:merge(M2, Context1, dict:from_list(Terms2))
                end,
+
 
     %% For each variable, see if it's defined in global vars -- if it is,
     %% prefer that value over the defaults
