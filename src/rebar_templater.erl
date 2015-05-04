@@ -66,13 +66,19 @@
     lists:foreach(
       fun({Type, F}) ->
               BaseName = filename:basename(F, ".template"),
-              TemplateTerms = consult(load_file(Files, Type, F)),
-              {_, VarList} = lists:keyfind(variables, 1, TemplateTerms),
-              Vars = lists:foldl(fun({V,_}, Acc) ->
-                                         [atom_to_list(V) | Acc]
-                                 end, [], VarList),
-              ?CONSOLE("  * ~s: ~s (~p) (variables: ~p)\n",
-                       [BaseName, F, Type, string:join(Vars, ", ")])
+              % TemplateTerms = consult(load_file(Files, Type, F)),
+              case consult(load_file(Files, Type, F)) of
+                  {error, Error} ->
+                      ?CONSOLE("~n!!Error occurs while processing file ~p: ~n~p~n~n",
+                               [F, Error]);
+                  TemplateTerms ->
+                      {_, VarList} = lists:keyfind(variables, 1, TemplateTerms),
+                      Vars = lists:foldl(fun({V,_}, Acc) ->
+                                                 [atom_to_list(V) | Acc]
+                                         end, [], VarList),
+                      ?CONSOLE(" * ~s: \n    ~p: ~s\n    variables: ~p\n",
+                               [BaseName, Type, F, string:join(Vars, ", ")])
+              end
       end, AvailTemplates),
     ok.
 
@@ -323,8 +329,13 @@ consult(Cont, Str, Acc) ->
         {done, Result, Remaining} ->
             case Result of
                 {ok, Tokens, _} ->
-                    {ok, Term} = erl_parse:parse_term(Tokens),
-                    consult([], Remaining, [maybe_dict(Term) | Acc]);
+                    % {ok, Term} = erl_parse:parse_term(Tokens),
+                    case erl_parse:parse_term(Tokens) of
+                        {ok, Term} ->
+                            consult([], Remaining, [maybe_dict(Term) | Acc]);
+                        {error, ErrorInfo} ->
+                            {error, ErrorInfo}
+                    end;
                 {eof, _Other} ->
                     lists:reverse(Acc);
                 {error, Info, _} ->
@@ -485,6 +496,33 @@ execute_template(Files, [{symlink, Existing, New} | Rest], TemplateType,
             ?ABORT("Failed while processing template instruction "
                    "{symlink, ~s, ~s}: ~p~n", [Existing, New, Reason])
     end;
+execute_template(Files, [{cwd, Dir} | Rest], TemplateType,
+                 TemplateName, Context, Force, ExistingFiles) ->
+    CwdAbsPath = filename:absname(Dir),
+    case filelib:ensure_dir(CwdAbsPath) of
+        ok ->
+            NContext = dict:store('cwd', CwdAbsPath, Context),
+            execute_template(Files, Rest, TemplateType, TemplateName,
+                             NContext, Force, ExistingFiles);
+        {error, Reason} ->
+            ?ABORT("Failed while processing template instruction "
+                   "{dir, ~s}: ~p\n", [Dir, Reason])
+    end;
+execute_template(Files, [{cmd, Commands} | Rest], TemplateType,
+                 TemplateName, Context, Force, ExistingFiles) ->
+    CwdDir = case dict:find(cwd, Context) of
+                 error -> "";
+                 {ok, Dir} -> Dir
+             end,
+    case command(Commands, CwdDir) of
+        {0, Output} ->
+            io:format("~s\n", [Output]),
+            execute_template(Files, Rest, TemplateType, TemplateName,
+                             Context, Force, ExistingFiles);
+        {_, Error} ->
+            ?ABORT("Failed while processing template instruction "
+                   "{cmd, ~s}: ~p~n", [Commands, Error])
+    end;
 execute_template(Files, [{variables, _} | Rest], TemplateType,
                  TemplateName, Context, Force, ExistingFiles) ->
     execute_template(Files, Rest, TemplateType, TemplateName,
@@ -494,3 +532,48 @@ execute_template(Files, [Other | Rest], TemplateType, TemplateName,
     ?WARN("Skipping unknown template instruction: ~p\n", [Other]),
     execute_template(Files, Rest, TemplateType, TemplateName, Context,
                      Force, ExistingFiles).
+
+%% https://github.com/richcarl/eunit/blob/master/src/eunit_lib.erl
+%% Replacement for os:cmd
+
+%% TODO: Better cmd support, especially on Windows (not much tested)
+%% TODO: Can we capture stderr separately somehow?
+
+command(Cmd) ->
+    command(Cmd, "").
+
+command(Cmd, Dir) ->
+    command(Cmd, Dir, []).
+
+command(Cmd, Dir, Env) ->
+    CD = if Dir =:= "" -> [];
+            true -> [{cd, Dir}]
+         end,
+    SetEnv = if Env =:= [] -> [];
+                true -> [{env, Env}]
+             end,
+    Opt = CD ++ SetEnv ++ [stream, exit_status, use_stdio,
+                           stderr_to_stdout, in, eof],
+    P = open_port({spawn, Cmd}, Opt),
+    get_data(P, []).
+
+get_data(P, D) ->
+    receive
+        {P, {data, D1}} ->
+            get_data(P, [D1|D]);
+        {P, eof} ->
+            port_close(P),
+            receive
+                {P, {exit_status, N}} ->
+                    {N, normalize(lists:flatten(lists:reverse(D)))}
+            end
+    end.
+
+normalize([$\r, $\n | Cs]) ->
+    [$\n | normalize(Cs)];
+normalize([$\r | Cs]) ->
+    [$\n | normalize(Cs)];
+normalize([C | Cs]) ->
+    [C | normalize(Cs)];
+normalize([]) ->
+    [].
