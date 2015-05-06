@@ -159,22 +159,25 @@ create1(Config, TemplateId) ->
         {variables, Vars} ->
             case parse_vars(Vars, dict:new()) of
                 {error, Entry} ->
-                    Context0 = undefined,
+                    NContext0 = undefined,
                     ?ABORT("Failed while processing variables from template ~p."
                            "Variable definitions must follow form of "
                            "[{atom(), term()}]. Failed at: ~p\n",
                            [TemplateId, Entry]);
-                Context0 ->
+                NContext0 ->
                     ok
             end;
         false ->
             ?WARN("No variables section found in template ~p; "
                   "using empty context.\n", [TemplateId]),
-            Context0 = dict:new()
+            NContext0 = dict:new()
     end,
 
+    %% Add some built-in variables
+    Context0 = dict:store(now_ts, format_time(erlang:localtime()), NContext0),
+
     %% Load global variables from disk file, if provided
-%% I don't like the original "global" idea (template_var option passing through command line) in rebar (#476)
+    %% I don't like the original "global" idea (template_var option passing through command line) in rebar (#476)
     %% SO HERE GOES WARNING:
     %% ** the branch break backwards compatibility! ***
     GVarsFile = filename:join([os:getenv("HOME"), ".rebar", "global.vars"]),
@@ -189,6 +192,7 @@ create1(Config, TemplateId) ->
                        M = fun(_Key, _Base, Override) -> Override end,
                        dict:merge(M, Context0, dict:from_list(Terms))
     end,
+
 
     %% Load variables that defined in rebar config file
     TemplateVars = rebar_config:get(Config, template_vars, []),
@@ -502,6 +506,7 @@ execute_template(Files, [{cwd, Dir} | Rest], TemplateType,
     case filelib:ensure_dir(CwdAbsPath) of
         ok ->
             NContext = dict:store('cwd', CwdAbsPath, Context),
+            ?CONSOLE("cd ~ts\n", [Dir]),
             execute_template(Files, Rest, TemplateType, TemplateName,
                              NContext, Force, ExistingFiles);
         {error, Reason} ->
@@ -514,9 +519,9 @@ execute_template(Files, [{cmd, Commands} | Rest], TemplateType,
                  error -> "";
                  {ok, Dir} -> Dir
              end,
+    ?CONSOLE("~ts\n", [Commands]),
     case command(Commands, CwdDir) of
-        {0, Output} ->
-            io:format("~s\n", [Output]),
+        {0, _Output} ->
             execute_template(Files, Rest, TemplateType, TemplateName,
                              Context, Force, ExistingFiles);
         {_, Error} ->
@@ -532,6 +537,11 @@ execute_template(Files, [Other | Rest], TemplateType, TemplateName,
     ?WARN("Skipping unknown template instruction: ~p\n", [Other]),
     execute_template(Files, Rest, TemplateType, TemplateName, Context,
                      Force, ExistingFiles).
+
+
+format_time({{Y, M, D}, {HH, MM, SS}}) ->
+    lists:flatten(io_lib:format("~4.10.0B-~2.10.0B-~2.10.0B ~2.10.0B:~2.10.0B:~2.10.0B",
+                                [Y, M, D, HH, MM, SS])).
 
 %% https://github.com/richcarl/eunit/blob/master/src/eunit_lib.erl
 %% Replacement for os:cmd
