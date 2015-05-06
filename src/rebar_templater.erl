@@ -181,18 +181,22 @@ create1(Config, TemplateId) ->
     %% SO HERE GOES WARNING:
     %% ** the branch break backwards compatibility! ***
     GVarsFile = filename:join([os:getenv("HOME"), ".rebar", "global.vars"]),
-    Context1 = case consult(load_file([], file, GVarsFile)) of
-                   {error,enoent} -> % no such file
-                       Context0;
-                   {error, Reason} ->
-                       ?ABORT("Unable to load template variables from ~s: ~p\n",
-                              [GVarsFile, Reason]);
-                   Terms ->
-                       %% TODO: Cleanup/merge with similar code in rebar_reltool
-                       M = fun(_Key, _Base, Override) -> Override end,
-                       dict:merge(M, Context0, dict:from_list(Terms))
-    end,
-
+    {ok, Cwd} = file:get_cwd(),
+    PVarsFile = filename:join([Cwd, "project.vars"]),
+    Context1 = lists:foldl(
+                 fun(VarsFile, ContextAccIn) ->
+                         case consult(load_file([], file, VarsFile)) of
+                             {error,enoent} -> % no such file
+                                 ContextAccIn;
+                             {error, Reason} ->
+                                 ?ABORT("Unable to load template variables from ~s: ~p\n",
+                                        [VarsFile, Reason]);
+                             Terms ->
+                                 %% TODO: Cleanup/merge with similar code in rebar_reltool
+                                 M = fun(_Key, _Base, Override) -> Override end,
+                                 dict:merge(M, ContextAccIn, dict:from_list(Terms))
+                         end
+                 end, Context0, [GVarsFile, PVarsFile]),
 
     %% Load variables that defined in rebar config file
     TemplateVars = rebar_config:get(Config, template_vars, []),
