@@ -176,13 +176,11 @@ create1(Config, TemplateId) ->
     %% Add some built-in variables
     Context0 = dict:store(now_ts, format_time(erlang:localtime()), NContext0),
 
-    %% Load global variables from disk file, if provided
-    %% I don't like the original "global" idea (template_var option passing through command line) in rebar (#476)
-    %% SO HERE GOES WARNING:
-    %% ** the branch break backwards compatibility! ***
+
     GVarsFile = filename:join([os:getenv("HOME"), ".rebar", "global.vars"]),
     {ok, Cwd} = file:get_cwd(),
     PVarsFile = filename:join([Cwd, "project.vars"]),
+    M = fun(_Key, _Base, Override) -> Override end,
     Context1 = lists:foldl(
                  fun(VarsFile, ContextAccIn) ->
                          case consult(load_file([], file, VarsFile)) of
@@ -193,18 +191,20 @@ create1(Config, TemplateId) ->
                                         [VarsFile, Reason]);
                              Terms ->
                                  %% TODO: Cleanup/merge with similar code in rebar_reltool
-                                 M = fun(_Key, _Base, Override) -> Override end,
                                  dict:merge(M, ContextAccIn, dict:from_list(Terms))
                          end
                  end, Context0, [GVarsFile, PVarsFile]),
 
     %% Load variables that defined in rebar config file
+    %% Load global variables from disk file, if provided
+    %% I don't like the original "global" idea (template_var option passing through command line) in rebar (#476)
+    %% SO HERE GOES WARNING:
+    %% ** the branch break backwards compatibility! ***
     TemplateVars = rebar_config:get(Config, template_vars, []),
     Context2 = case lists:keyfind(TemplateId, 1, TemplateVars) of
                    false       -> Context1;
                    {_, Terms2} ->
-                       M2 = fun(_Key, _Base, Override) -> Override end,
-                       dict:merge(M2, Context1, dict:from_list(Terms2))
+                       dict:merge(M, Context1, dict:from_list(Terms2))
                end,
 
 
@@ -298,8 +298,10 @@ load_file(Files, escript, Name) ->
     {Name, Bin} = lists:keyfind(Name, 1, Files),
     Bin;
 load_file(_Files, file, Name) ->
-    {ok, Bin} = file:read_file(Name),
-    Bin.
+    case file:read_file(Name) of
+        {ok, Bin}       -> Bin;
+        {error, Reason} -> {error, Reason}
+    end.
 
 %%
 %% Parse/validate variables out from the template definition
@@ -327,6 +329,8 @@ update_vars(Config, [Key | Rest], Dict) ->
 %%
 %% Given a string or binary, parse it into a list of terms, ala file:consult/1
 %%
+consult({error, Reason}) ->
+    {error, Reason};
 consult(Str) when is_list(Str) ->
     consult([], Str, []);
 consult(Bin) when is_binary(Bin)->
