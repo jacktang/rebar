@@ -143,7 +143,7 @@ init_config({Options, _NonOptArgs}) ->
     %% Keep track of how many operations we do, so we can detect bad commands
     BaseConfig1 = rebar_config:set_xconf(BaseConfig, operations, 0),
     %% Initialize vsn cache
-    rebar_config:set_xconf(BaseConfig1, vsn_cache, dict:new()).
+    rebar_utils:init_vsn_cache(BaseConfig1).
 
 init_config1(BaseConfig) ->
     %% Determine the location of the rebar executable; important for pulling
@@ -284,7 +284,12 @@ help() ->
                       {"freebsd", compile, "c_src/freebsd_tweaks.sh"},
                       {eunit, "touch file2.out"},
                       {compile, "touch postcompile.out"}]}
-       ]).
+       ]),
+    ?CONSOLE(
+       "Environment variables:~n"
+       "  REBAR_DEPS_PREFER_LIBS to look for dependecies in system libs prior fetching.~n"
+       "  REBAR_VSN_CACHE_FILE to load vsn cache from and save to specified file.~n"
+       "~n", []).
 
 %%
 %% Parse command line arguments using getopt and also filtering out any
@@ -501,7 +506,9 @@ option_spec_list() ->
      {profile,  $p, "profile",  undefined,
       "Profile this run of rebar. Via profiler= you can optionally select "
       "either fprof (default) or eflame. The result can be found in "
-      "fprof.analysis or eflame.svg."},
+      "fprof.analysis or eflame.svg. Additionally, in fprof mode, if "
+      "erlgrind can be found in $PATH, a Cachegrind file (fprof.cgrind) "
+      "will be generated as well."},
      {keep_going, $k, "keep-going", undefined,
       "Keep running after a command fails"},
      {recursive, $r, "recursive", boolean,
